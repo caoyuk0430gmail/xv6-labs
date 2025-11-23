@@ -4,6 +4,8 @@
 #include "kernel/fs.h"
 
 // we dont need fmtname from ls.c, we just use de.name to fetch filename
+// de vs st: You read a directory to get a list of dirents (names and numbers).
+// For each dirent, you use its name to construct a full path and call stat to get the stat struct (the full details)
 void
 find(char *path, char *filename) {
     char buf[512], *p;

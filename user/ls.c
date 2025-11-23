@@ -3,6 +3,8 @@
 #include "user/user.h"
 #include "kernel/fs.h"
 
+// de vs st: You read a directory to get a list of dirents (names and numbers).
+// For each dirent, you use its name to construct a full path and call stat to get the stat struct (the full details)
 char*
 fmtname(char *path)
 {
