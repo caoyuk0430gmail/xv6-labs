@@ -104,6 +104,8 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_trace(void);
+extern uint64 sys_sysinfo(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,8 +129,53 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_trace]   sys_trace,
+[SYS_sysinfo]   sys_sysinfo,
 };
 
+const char *syscall_names[] = {
+[SYS_fork]    "fork",
+[SYS_exit]    "exit",
+[SYS_wait]    "wait",
+[SYS_pipe]    "pipe",
+[SYS_read]    "read",
+[SYS_kill]    "kill",
+[SYS_exec]    "exec",
+[SYS_fstat]   "fstat",
+[SYS_chdir]   "chdir",
+[SYS_dup]     "dup",
+[SYS_getpid]  "getpid",
+[SYS_sbrk]    "sbrk",
+[SYS_sleep]   "sleep",
+[SYS_uptime]  "uptime",
+[SYS_open]    "open",
+[SYS_write]   "write",
+[SYS_mknod]   "mknod",
+[SYS_unlink]  "unlink",
+[SYS_link]    "link",
+[SYS_mkdir]   "mkdir",
+[SYS_close]   "close",
+[SYS_trace]   "trace",
+[SYS_sysinfo]   "sysinfo",
+};
+
+
+// a7 is only for the syscall number; a0 is both the first argument on entry and the return value on exit.
+//Example: read(fd, buf, n)
+// User code sets:
+// a7 = SYS_read
+// a0 = fd
+// a1 = buf
+// a2 = n
+// Kernel:
+// Reads a7 → dispatches to sys_read.
+// Inside sys_read, uses argint(0, &fd) (fetch from a0), argaddr(1, &buf) (fetch from a1), etc.
+// Returns number of bytes read.
+// Stores return value into a0.
+// User code sees the return value in a0.
+
+// It is invoked by the kernel’s trap handler (usertrap()) whenever a user program executes ecall. 
+// So the sequence is: user calls syscall → ecall → trap → usertrap() → syscall() → handler → return.
 void
 syscall(void)
 {
@@ -138,6 +185,11 @@ syscall(void)
   num = p->trapframe->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     p->trapframe->a0 = syscalls[num]();
+    // p->mask >> num moves the bits of the mask to the right so that the bit you care about ends up in the "0th" position (the far right). Then it clears all other bits using & 1.
+    // read num is 5, p->mask = 32, 32 >> 5 is 0010 0000 >> 5 = 0000 0001
+    if (p->mask >> num & 1) {
+      printf("%d: syscall %s -> %d\n",p->pid, syscall_names[num], p->trapframe->a0);
+    }
   } else {
     printf("%d %s: unknown sys call %d\n",
             p->pid, p->name, num);

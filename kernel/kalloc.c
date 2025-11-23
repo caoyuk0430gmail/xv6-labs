@@ -80,3 +80,20 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+// count the bytes of free mem
+// the free mem is a linked list in xv6 kmem.freelist, so free bytes = PGSIZE * PGS
+uint64
+kfreemem(void)
+{
+  struct run *r;
+  uint64 numbytes = 0;
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+  while(r) {
+    numbytes += PGSIZE;
+    r = r->next;
+  }
+  release(&kmem.lock);
+  return numbytes;
+}

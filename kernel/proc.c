@@ -126,6 +126,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  p->mask = 0; // initialize mask for all new proc.
 
   return p;
 }
@@ -294,6 +295,8 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+  // child process copies the parent mask
+  np->mask = p->mask;
 
   release(&np->lock);
 
@@ -692,4 +695,19 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+nproc(void)
+{
+  struct proc *p;
+  int numproc = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    // no need to lock, just read not write
+    if(p->state != UNUSED) {
+      numproc++;
+    }
+  }
+  return numproc;
 }
