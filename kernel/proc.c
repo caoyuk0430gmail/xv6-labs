@@ -31,15 +31,16 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
 
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // pgt lab, we dont map all process kernel stack in the global pgt, we do inside allocproc
+      // // Allocate a page for the process's kernel stack.
+      // // Map it high in memory, followed by an invalid
+      // // guard page.
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
   kvminithart();
 }
@@ -107,6 +108,29 @@ allocproc(void)
 found:
   p->pid = allocpid();
 
+  // lab pgt new code starts
+  // we need to 1. create pre process kernel page table
+  // 2.follow procinit to allow a page for kernel stack, map ithigh in memory, followed by an invalid guard page.
+  p->kpagetable = kvminit_pgt();
+  if(p->kpagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  char *pa = kalloc();
+  if(pa == 0) {
+    freeproc(p); // freeproc will handle cleanup
+    release(&p->lock);
+    return 0;
+  }
+  // We map it at the specific virtual address defined by KSTACK(index)
+  uint64 va = KSTACK((int) (p - proc));
+  // printf("map kernels stack va: %p to pa: %p\n", va, pa);
+  kvmmap_pgt(p->kpagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  // Record the VA in the proc struct
+  p->kstack = va;
+  // lab pgt new code ends
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
@@ -130,6 +154,31 @@ found:
   return p;
 }
 
+// Free a kernel page table.
+// Warning: This does NOT free the physical pages mapped by the leaf entries.
+// It only frees the page-table pages themselves.
+void
+freeproc_kernel_pagetable(pagetable_t kpt)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = kpt[i];
+    // if it is a valid PTE entry
+    if(pte & PTE_V) {
+      // In xv6/RISC-V, it is a directory if the R/W/X bits are ALL zero.
+      // If any of R/W/X are set, it is a leaf (maps to actual memory), so stop.
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+        // we only recursively free when it is directory, we dont touch leafs
+        // PTE2PA extracts the physical address of the next page table
+        // We cast it to pagetable_t (which is just uint64*)
+        uint64 child = PTE2PA(pte);
+        freeproc_kernel_pagetable((pagetable_t)child);
+      }
+      // // If it is a leaf, we DO NOTHING (do not free the physical RAM!)
+    }
+  }
+  kfree((void*)kpt);
+}
+
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
@@ -139,6 +188,24 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  // lab pgt
+  // we need to free kernel stack and free process kpgt
+  // in allocproc, KSTACK is mapped into kernel pgt va location p->kstack = va, now we need to find pa of it and kfree
+  // Since the Stack is a leaf node, our freeproc_kernel_pagetable function will NOT free it. Therefore, we MUST free it manually here first
+  if (p->kstack){
+    pte_t *pte = walk(p->kpagetable, p->kstack, 0);
+    if(pte && (*pte & PTE_V)){
+      // Conversion: PTE Bits -> Physical Address
+      uint64 pa = PTE2PA(*pte);
+      // ACTION: Destroy the actual RAM page.
+      kfree((void*)pa);
+    }
+    p->kstack = 0;
+  }
+  if (p->kpagetable){
+    freeproc_kernel_pagetable(p->kpagetable);
+    p->kpagetable = 0;
+  }
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -476,8 +543,12 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+        // When swtch returns here, we are still using Process A's Private Kernel Page Table. The hardware doesn't automatically switch back for us.
         swtch(&c->context, &p->context);
-
+        // Switch back to Global Kernel Page Table
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
