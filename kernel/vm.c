@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h" 
+#include "proc.h" 
 
 /*
  * the kernel's page table.
@@ -21,37 +23,54 @@ extern char trampoline[]; // trampoline.S
 void
 kvminit()
 {
-  kernel_pagetable = (pagetable_t) kalloc();
-  memset(kernel_pagetable, 0, PGSIZE);
+  // kernel initialize a pagetable for the top level PT (3-level) and zero all PTE
+  kernel_pagetable = kvminit_pgt();
+}
 
+// lab pgt, wrap kvminit by generic pgt
+/*
+ * create a direct-map page table for the page table.
+ */
+pagetable_t
+kvminit_pgt()
+{
+  // kernel initialize a pagetable for the top level PT (3-level) and zero all PTE
+  pagetable_t pgt = (pagetable_t) kalloc();
+  memset(pgt, 0, PGSIZE);
+  // starts mapping all I/O devices one by one
   // uart registers
-  kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  // va is #define UART0 0x10000000L, it correspond to pa 0x10000000.
+  kvmmap_pgt(pgt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
   // virtio mmio disk interface
-  kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  kvmmap_pgt(pgt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
   // CLINT
-  kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  kvmmap_pgt(pgt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 
   // PLIC
-  kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  kvmmap_pgt(pgt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
 
   // map kernel text executable and read-only.
-  kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  kvmmap_pgt(pgt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
 
   // map kernel data and the physical RAM we'll make use of.
-  kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  kvmmap_pgt(pgt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
-  kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  kvmmap_pgt(pgt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return pgt;
 }
+
 
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
 kvminithart()
 {
+  // write satp register and enable pgtable using the kernel_pagetable created in kvminit
   w_satp(MAKE_SATP(kernel_pagetable));
   sfence_vma();
 }
@@ -71,20 +90,49 @@ kvminithart()
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
+  // Safety check: Don't allow lookups beyond the top of memory.
   if(va >= MAXVA)
     panic("walk");
 
+  // Loop through Level 2 (Top) and Level 1 (Middle).
+  // Level 0 (Leaf) is handled after the loop.
   for(int level = 2; level > 0; level--) {
+    
+    // --- STEP 1: Find the entry in the current directory ---
+    // PX(level, va) extracts the 9 bits of index for this level.
+    // &pagetable[...] gets the address of that slot.
+    // CRITICAL: 'pagetable' is a pointer. In C, dereferencing it creates a VA access.
     pte_t *pte = &pagetable[PX(level, va)];
+
+    // --- STEP 2: Is there a path down? ---
     if(*pte & PTE_V) {
+      // YES: The entry is Valid (PTE_V is 1).
+      
+      // --- STEP 3: The "Magic" Link (The Quote!) ---
+      // PTE2PA(*pte) extracts the raw PHYSICAL Address (e.g., 0x5555000) from the bits.
+      // We cast it to (pagetable_t), effectively turning a PA into a VA.
+      // This only works because of Identity Mapping (VA 0x5555000 maps to PA 0x5555000).
       pagetable = (pagetable_t)PTE2PA(*pte);
+      
     } else {
+      // NO: The entry is empty (Invalid).
+      
+      // If 'alloc' is 0, we give up (return null).
+      // If 'alloc' is 1, we create a new page table page on the fly.
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
+      
+      // kalloc() returns a Kernel Virtual Address (e.g., 0x9000).
+      // We clean the new page with zeros.
       memset(pagetable, 0, PGSIZE);
+      
+      // We link the new page into the current directory.
+      // PA2PTE converts the pointer (VA/PA) back into the physical bits for the PTE.
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
+  
+  // Return the address of the final Leaf Entry (Level 0).
   return &pagetable[PX(0, va)];
 }
 
@@ -121,6 +169,14 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
     panic("kvmmap");
 }
 
+// add a mapping to the generic page table.
+void
+kvmmap_pgt(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(pagetable, va, sz, pa, perm) != 0)
+    panic("kvmmap_pgt");
+}
+
 // translate a kernel virtual address to
 // a physical address. only needed for
 // addresses on the stack.
@@ -131,8 +187,18 @@ kvmpa(uint64 va)
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
+  // lab pgt
+  // kvmpa is used to translate stack addresses for disk I/O.
+  //  Since the Kernel Stack is now mapped only in the process's private page table (and not the global one) via allocproc,
+  // kvmpa must look in the right place
+  pagetable_t kpgt = kernel_pagetable;
+  struct proc *p = myproc();
+  // If we are running a process, and that process has a kernel map...
+  if(p != 0 && p->kpagetable != 0) {
+    kpgt = p->kpagetable; // ...use the private map instead.
+  }
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(kpgt, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -287,6 +353,41 @@ freewalk(pagetable_t pagetable)
     }
   }
   kfree((void*)pagetable);
+}
+
+// recursively walk through page-table pages to print PTEs.
+void
+vmprint_walk(pagetable_t pagetable, int level)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    // if it is a valid PTE entry
+    if(pte & PTE_V) {
+      // we first print the indentation
+      for (int j = 0; j <= level; j++) {
+         printf(" ..");
+      }
+      // Print the Index, PTE hex, and Physical Address hex
+      // %p in xv6 handles the 0x prefix and zero-padding automatically
+      printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+      // Recurse deeper IF this PTE points to another Page Table.
+      // In xv6/RISC-V, it is a directory if the R/W/X bits are ALL zero.
+      // If any of R/W/X are set, it is a leaf (maps to actual memory), so stop.
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+         // PTE2PA extracts the physical address of the next page table
+        // We cast it to pagetable_t (which is just uint64*)
+        uint64 child = PTE2PA(pte);
+        vmprint_walk((pagetable_t)child, level + 1);
+      }
+    }
+  }
+}
+
+void
+vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  vmprint_walk(pagetable, 0);
 }
 
 // Free user memory pages,
