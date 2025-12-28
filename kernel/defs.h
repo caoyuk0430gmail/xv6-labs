@@ -183,6 +183,11 @@ pte_t*          walk(pagetable_t, uint64, int);
 void            kvmmap_pgt(pagetable_t, uint64, uint64, uint64, int);
 pagetable_t     kvminit_pgt(void);
 void            freeproc_kernel_pagetable(pagetable_t);
+int             utokvmcopy(pagetable_t, pagetable_t, uint64, uint64);
+
+// vmcopyin.c
+int             copyin_new(pagetable_t, char *, uint64, uint64);
+int             copyinstr_new(pagetable_t, char *, uint64, uint64);
 
 // plic.c
 void            plicinit(void);

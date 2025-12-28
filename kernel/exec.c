@@ -70,6 +70,10 @@ exec(char *path, char **argv)
   uint64 sz1;
   if((sz1 = uvmalloc(pagetable, sz, sz + 2*PGSIZE)) == 0)
     goto bad;
+  // Check for PLIC overflow
+  if(sz1 > PLIC){
+      goto bad; 
+  }
   sz = sz1;
   uvmclear(pagetable, sz-2*PGSIZE);
   sp = sz;
@@ -114,6 +118,12 @@ exec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
+  // 1. Unmap the OLD user memory from the Kernel Page Table.
+  // We unmap from 0 to oldsz. We use '0' do_free because we don't own the phys RAM.
+  uvmunmap(p->kpagetable, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
+
+  // 2. Map the NEW user memory into the Kernel Page Table.
+  utokvmcopy(p->pagetable, p->kpagetable, 0, p->sz);
   proc_freepagetable(oldpagetable, oldsz);
   // When you boot xv6, the kernel starts up, initializes hardware, and then creates exactly one process manually. That process is assigned ID 1.
   // This process runs the code found in user/init.c.

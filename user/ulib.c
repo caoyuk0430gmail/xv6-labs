@@ -35,6 +35,7 @@ strlen(const char *s)
 void*
 memset(void *dst, int c, uint n)
 {
+  // Treat this memory address as a list of single bytes (8 bits each).
   char *cdst = (char *) dst;
   int i;
   for(i = 0; i < n; i++){

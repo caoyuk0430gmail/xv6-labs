@@ -286,7 +286,11 @@ userinit(void)
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
+  // Process 1 (initcode) is tiny; it fits entirely inside the first page of memory
   p->sz = PGSIZE;
+
+  // copy user mappings into kgpt
+  utokvmcopy(p->pagetable, p->kpagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -310,11 +314,25 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    // --- NEW CHECK: PLIC LIMIT ---
+    if(sz + n > PLIC){
+      return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    // 1. p->sz is still the OLD size (Start of new memory)
+    // 2. sz is the NEW size (End of new memory)
+    utokvmcopy(p->pagetable, p->kpagetable, p->sz, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // We assume the size shrinks. We need to unmap the range [new_sz, old_sz).
+    // We pass '0' as the last argument so we do NOT free the physical RAM 
+    // (uvmdealloc already did that for the user table).
+    uint64 old_sz = p->sz;
+    if (sz < old_sz) {
+       uvmunmap(p->kpagetable, PGROUNDUP(sz), (PGROUNDUP(old_sz) - PGROUNDUP(sz)) / PGSIZE, 0);
+    }
   }
   p->sz = sz;
   return 0;
@@ -343,6 +361,10 @@ fork(void)
   np->sz = p->sz;
 
   np->parent = p;
+
+  // copy user mappings into kpgt
+  // no need to worry PLIC limit because parent proc gurantee it
+  utokvmcopy(np->pagetable, np->kpagetable, 0, np->sz);
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);

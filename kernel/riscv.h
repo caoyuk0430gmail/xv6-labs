@@ -323,6 +323,7 @@ sfence_vma()
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page
 
+// rounds an address UP to the nearest multiple of the page size (4096 bytes), ensures we start at the first NEWLY allocated page, avoiding the old pages that are already in the kernel table
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
 

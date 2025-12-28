@@ -31,6 +31,9 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   struct proc *p = myproc();
 
+  // srcva + len < srcva is necessary to detect Integer Overflow
+  // p->sz (Process Size): 4096 (0x1000) srcva (Source Address): 10 (0xA) len (Length to copy): 0xFFFFFFFFFFFFFFFF
+  // srcva+len overflows = 9 < srcva
   if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
     return -1;
   memmove((void *) dst, (void *)srcva, len);
