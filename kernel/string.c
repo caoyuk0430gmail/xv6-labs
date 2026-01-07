@@ -1,5 +1,6 @@
 #include "types.h"
 
+// writes a specific byte c to every single position in that memory block.
 void*
 memset(void *dst, int c, uint n)
 {

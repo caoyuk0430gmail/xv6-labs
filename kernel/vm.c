@@ -142,12 +142,14 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   }
   
   // Return the address of the final Leaf Entry (Level 0).
+  // pagetable[i] is the content of PTE, The raw 64-bit number (PPN + Flags).
   return &pagetable[PX(0, va)];
 }
 
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
+// Kernel Page Table Identity Maps all of RAM (from 0x80000000 to PHYSTOP), the kernel can read the contents of the User Page Table just like it reads an array of integers
 uint64
 walkaddr(pagetable_t pagetable, uint64 va)
 {
@@ -220,6 +222,11 @@ kvmpa(uint64 va)
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+//
+// map the entire page 4kb at once.
+// Because the hardware automatically copies the bottom 12 bits (the offset) directly from Virtual to Physical,
+// mappages doesn't need to care about them. It only needs to set up the translation for the top part (the Page Number).
+// Calling PGROUNDDOWN effectively throws away the offset so mappages can focus on the Page alignment.
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {

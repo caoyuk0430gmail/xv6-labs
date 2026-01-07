@@ -11,6 +11,8 @@
 
 void freerange(void *pa_start, void *pa_end);
 
+// very first byte of memory immediately AFTER the kernel's compiled code and data.
+// 0x80020000 ... 0x86400000	PHYSTOP
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
