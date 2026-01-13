@@ -121,6 +121,7 @@ sys_uptime(void)
 // Inside sys_sigalarm, you must actively reach back into the Trapframe to grab the data.
 // argint(0, ...) grabs the 10 from the saved a0.
 // argaddr(1, ...) grabs the function address from the saved a1.
+// sys_sigalarm is called by the user at the beginning of the program to configure the alarm
 uint64
 sys_sigalarm(void)
 {
@@ -134,11 +135,21 @@ sys_sigalarm(void)
   p->alarm_handler = (void(*)())handler;
   // whenever alarm triggered, passes is reset to zero.
   p->ticks_passed = 0;
+  // init alarm, not running yet. will be triggered in usertrap
+  p->handler_running = 0;
   return 0;
 }
 
+// user alarm handlers are required to call the sigreturn system call when they have finished
 uint64
 sys_sigreturn(void)
 {
-  return 0;
+  // Copy the backup *p->alarm_trapframe BACK into *p->trapframe.
+  // This restores epc (Program Counter), sp (Stack Pointer), and all registers to exactly how they were before the alarm.
+  struct proc *p = myproc();
+  *p->trapframe = *p->alarm_trapframe;
+  // alarm not running
+  p->handler_running = 0;
+  // sys_sigreturn usually returns the value in a0. If we restore the entire trapframe, we are restoring the old a0 too.
+  return p->trapframe->a0;
 }

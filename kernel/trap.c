@@ -83,9 +83,14 @@ usertrap(void)
     // if so, alarm should be triggered and reset ticks_passed
     if (p->ticks_interval != 0) {
       p->ticks_passed += 1;
-      if (p->ticks_passed >= p->ticks_interval) {
+      if ((p->ticks_passed >= p->ticks_interval) && (p->handler_running == 0)) {
         //reset
         p->ticks_passed = 0;
+        // alarm running
+        p->handler_running = 1;
+        // Before we redirect epc to alarm handler, we save cpu state to alarm trapframe
+        // *deferrence, i.e. actual struct data sitting at that address. C copies every byte of the source struct into the destination struct.
+        *p->alarm_trapframe = *p->trapframe;
         // The value in 'epc' is the address of the code the user WAS running.
         // We overwrite it with the address of the handler.
         // When usertrap returns, it will load 'epc' into the PC, effectively jumping to the handler.
