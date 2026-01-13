@@ -2,6 +2,7 @@
 // File-system system calls.
 // Mostly argument checking, since we don't trust
 // user code, and calls into file.c and fs.c.
+// System calls related to Files and Directories. open, read, write, close, mkdir, dup, pipe.
 //
 
 #include "types.h"

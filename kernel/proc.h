@@ -103,4 +103,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int ticks_interval;          // Every "ticks_interval" of CPU time the alarm triggered, 0 means disable sigalarm. 1 Tick = 1 Hardware Timer Interrupt (which happens every 1,000,000 CPU cycles, or roughly 0.1 seconds).
+  int ticks_passed;            // how many ticks have passed since the last call
+  void (*alarm_handler)();     // Pointer to the user function to call
 };

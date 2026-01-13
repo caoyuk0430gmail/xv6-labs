@@ -105,6 +105,11 @@ allocproc(void)
   return 0;
 
 found:
+  // Lab: Alarm
+  p->ticks_interval = 0;
+  p->ticks_passed = 0;
+  p->alarm_handler = 0;
+
   p->pid = allocpid();
 
   // Allocate a trapframe page.

@@ -77,8 +77,23 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    // check is sigalarm is enabled
+    // if so, check ticks_passed == ticks_interval
+    // if so, alarm should be triggered and reset ticks_passed
+    if (p->ticks_interval != 0) {
+      p->ticks_passed += 1;
+      if (p->ticks_passed >= p->ticks_interval) {
+        //reset
+        p->ticks_passed = 0;
+        // The value in 'epc' is the address of the code the user WAS running.
+        // We overwrite it with the address of the handler.
+        // When usertrap returns, it will load 'epc' into the PC, effectively jumping to the handler.
+        p->trapframe->epc = (uint64)p->alarm_handler;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
