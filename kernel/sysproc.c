@@ -127,6 +127,7 @@ sys_sigalarm(void)
 {
   int ticks_interval;
   uint64 handler; // user pointer
+  // argint doesn't look at the physical CPU register. It looks at the Trapframe memory. it calls return p->trapframe->a0.
   if(argint(0, &ticks_interval) < 0 || argaddr(1, &handler) < 0)
     return -1;
 
