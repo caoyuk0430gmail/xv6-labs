@@ -311,7 +311,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -320,19 +320,73 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // lab COW, we dont alloc and copy, we only create mappings for child pgt
+    // we need to change the flags to be Readonly before we map
+    if (flags & PTE_W) {
+      flags &= ~PTE_W;  // Remove Write permission
+      flags |= PTE_COW; // Add our custom COW flag
+      // Update the parent's PTE to also be Read-Only & COW, mappages will set flags for child ptes
+      // Or will  merges the Address bits with the Flag bits
+      *pte = PA2PTE(pa) | flags;
+    }
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
+    // increate the pa ref
+    kref_up((void*)pa);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+    //   kfree(mem);
+    //   goto err;
+    // }
   }
   return 0;
 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+// in usertrap.c we need to decide if current va's pte is a COW
+// if so, we need to do what originally down in uvmcopy
+// kalloc to allocate new pa, make it RW and kfree old pa
+// no need to revert old pa COW because we are in child process pgt, and
+// If the Parent never writes to that page, it doesn't matter that it lacks PTE_W. It can read just fine.
+// If the Parent does write to that page later, it will trigger a Page Fault (because it still has PTE_COW=1).
+// Handle a Copy-On-Write page fault.
+// Returns 0 on success, -1 on failure.
+int
+cow_alloc(pagetable_t pagetable, uint64 va) {
+  pte_t *pte;
+  uint64 pa;
+  uint flags;
+  char *mem;
+
+  if (va >= MAXVA) return -1;
+  pte = walk(pagetable, va, 0);
+  if (pte == 0) return -1;
+  // va > p->sz is covered by PTE_V
+  if ((*pte & PTE_V) == 0) return -1;
+  if ((*pte & PTE_U) == 0) return -1;
+
+  // check if it has COW
+  if ((*pte & PTE_COW) == 0) {
+    return -1; // Standard segmentation fault
+  }
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_COW;
+  flags |= PTE_W;
+  if((mem = kalloc()) == 0)
+      return -1;
+  memmove(mem, (char*)pa, PGSIZE);
+  // we already create the mapping in uvmcopy, now we need to update the PTE entry with the new PA
+  *pte = PA2PTE(mem) | flags;
+  // then we need to kfree, decrease ref_count for old pa
+  kfree((void*)pa);
+  return 0;
 }
 
 // mark a PTE invalid for user access.
@@ -348,6 +402,18 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+// why COW only need to change copyout
+// 1. Lazy Allocation: Memory doesn't exist yet
+// In Lazy Allocation, if p->sz grew but the memory hasn't been touched, there is no physical RAM allocated at all. The PTE is 0 (Invalid).
+// copyout (Kernel wants to write): The kernel tries to write. The RAM doesn't exist. It must allocate the RAM first.
+// copyin (Kernel wants to read): A user program calls write(fd, buffer, len) to save a string to disk. But buffer is lazy! The kernel tries to read the buffer to write it to disk. The RAM doesn't exist. It must allocate the RAM first, fill it with zeros, and then "read" those zeros.
+// Result: In Lazy Allocation, both Read and Write operations fail if the memory isn't there. You must intercept both copyin and copyout.
+// 2. Copy-On-Write (COW): Memory exists, but is shared
+// In COW, when a process forks, the physical RAM does exist. The PTE is Valid (PTE_V = 1), but it is marked as Read-Only (PTE_W = 0) and PTE_COW.
+// copyout (Kernel wants to write): The kernel wants to put data from the disk into the user's buffer. The buffer is shared with another process. If the kernel just writes to it, it destroys the other process's data. Therefore, copyout must intercept, allocate a private copy (cow_alloc), and write to the new private page.
+// copyin (Kernel wants to read): The kernel wants to read the user's buffer to save it to disk. Does reading a shared book destroy the book? No. Does the kernel care that the other process is also looking at the same physical memory? No.
+// Result: The kernel can just use walkaddr to get the physical address of the shared page and memmove the data out of it. It doesn't violate isolation because it's only reading.
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -355,9 +421,23 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA)
+      return -1;
+    
+    // Look up the PTE to see if it is a COW page
+    pte = walk(pagetable, va0, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0)
+      return -1;
+
+    // If it is a COW page, force the allocation NOW before we write!
+    if(*pte & PTE_COW) {
+      if(cow_alloc(pagetable, va0) < 0)
+        return -1;
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
