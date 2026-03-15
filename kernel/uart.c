@@ -100,7 +100,7 @@ uartputc(int c)
       // wait for uartstart() to open up space in the buffer.
       // // 3. 满了！厨师没地方放菜了。
       // 核心动作：睡觉 (sleep)。交出 CPU，直到下半部取走菜并唤醒我。
-      // sleep 和 wakeup 机制的设计哲学中：你睡在什么“事件/条件”上，就用代表那个“事件/条件”的变量地址作为“床位号 (Channel)”。
+      // sleep 和 wakeup 机制的设计哲学中：你睡在什么“事件/条件”上，就用代表那个“事件/条件”的变量地址作为“床位号 (Channel)”。 it sleeps on the uart_tx_r, and release the lock before it sleeps to hand out CPUs.
       // 写指针 uart_tx_w 只有厨师自己能动。厨师在睡觉，写指针绝对不会动。唯一能让 Buffer 腾出空位的人，是外卖小哥（硬件/下半部）。
       sleep(&uart_tx_r, &uart_tx_lock);
     } else {
@@ -165,6 +165,7 @@ uartstart()
     uart_tx_r = (uart_tx_r + 1) % UART_TX_BUF_SIZE;
     
     // maybe uartputc() is waiting for space in the buffer.
+    // any process that sleep on the read channel id should wakeup!
     // 4. 通知：如果有厨师因为取餐台满了在睡觉，现在腾出空地了，叫醒他！
     // sleep 和 wakeup 机制的设计哲学中：你睡在什么“事件/条件”上，就用代表那个“事件/条件”的变量地址作为“床位号 (Channel)”。
     // 写指针 uart_tx_w 只有厨师自己能动。厨师在睡觉，写指针绝对不会动。唯一能让 Buffer 腾出空位的人，是外卖小哥（硬件/下半部）。
@@ -197,6 +198,7 @@ uartgetc(void)
 // 触发者： 它是被 trap.c 里的硬件中断机制强行调用的。
 // 特征： 它绝对不敢调用 sleep()。它必须以最快速度处理完硬件的“抱怨”然后滚蛋。
 // 它要处理两件事：硬件说“我收到外面传来的字符了”（输入），或者硬件说“我把刚才那个字符发完了”（输出）。
+// 生产者被动响应 (Bottom Half)：uartintr -> consoleintr
 void
 uartintr(void)
 {
