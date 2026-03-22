@@ -16,6 +16,11 @@ struct entry {
 struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
+// pthread_mutex_t lock;            // declare a lock
+// Instead of one big lock for the whole table, we create one small lock for every single bucket.
+// A race condition only happens if two threads try to modify the same linked list (table[i]) at the same time.
+// If Thread 1 is working on table[0] and Thread 2 is working on table[1], they are safe!
+ pthread_mutex_t lock[NBUCKET];
 
 double
 now()
@@ -25,6 +30,10 @@ now()
  return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
 
+// Why pass &table[0] (as p)?
+// Because a function in C cannot change a variable unless it knows its address.
+// If we just passed table[0] and tried to say n = e, it would only change a local copy of the pointer inside the function.
+// By passing &table[0], we give the function the power to reach back into the global array and update the starting point of the list.
 static void 
 insert(int key, int value, struct entry **p, struct entry *n)
 {
@@ -42,6 +51,9 @@ void put(int key, int value)
 
   // is the key already present?
   struct entry *e = 0;
+  // the reason we can not put lock around if e{insert} is that there can be two thread go through for loop and didnt find the key,
+  // then both end in insert, even if the insert is locked fine, we can end up add two nodes with repetitive key
+  pthread_mutex_lock(&lock[i]);       // acquire lock only for bucket[i]
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key)
       break;
@@ -51,8 +63,11 @@ void put(int key, int value)
     e->value = value;
   } else {
     // the new is new.
+    // insert at head
+    // table[i] is the addr of the first node in the kinked list, &table[i] is the addr of the pointer itself. *p = e The array table[0] now points to the New Node e (7000).
     insert(key, value, &table[i], table[i]);
   }
+  pthread_mutex_unlock(&lock[i]);     // release lock
 }
 
 static struct entry*
@@ -106,6 +121,10 @@ main(int argc, char *argv[])
   if (argc < 2) {
     fprintf(stderr, "Usage: %s nthreads\n", argv[0]);
     exit(-1);
+  }
+  // pthread_mutex_init(&lock, NULL); // initialize the lock
+  for (int i = 0; i < NBUCKET; i++) {
+    pthread_mutex_init(&lock[i], NULL);
   }
   nthread = atoi(argv[1]);
   tha = malloc(sizeof(pthread_t) * nthread);

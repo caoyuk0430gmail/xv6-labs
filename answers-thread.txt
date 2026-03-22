@@ -1,0 +1,1 @@
+thread 1 and 2 have race condition to insert new node into the table[i]
