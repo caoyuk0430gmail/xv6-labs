@@ -366,7 +366,9 @@ cow_alloc(pagetable_t pagetable, uint64 va) {
 
   if (va >= MAXVA) return -1;
   pte = walk(pagetable, va, 0);
+  // lec12 cowlab, for most illegal addr, there will be no PTE entry, so this if solves most cases.
   if (pte == 0) return -1;
+  // lec12 cowlab, extra protect we need are for trampoline and trampframe. And this check for PTE_U is good if we only have COW feature. If we have extra features like lazy alloc, checking PTE_U is not a good way.
   // va > p->sz is covered by PTE_V
   if ((*pte & PTE_V) == 0) return -1;
   if ((*pte & PTE_U) == 0) return -1;
@@ -434,6 +436,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       return -1;
 
     // If it is a COW page, force the allocation NOW before we write!
+    // lec12 COW lab, we actually dont need COW bit specifically, it is a COW page if it has PTE_U set and NO PTE_W bit set, meaning a write-protected user PTE, it is a COW PTE.
     if(*pte & PTE_COW) {
       if(cow_alloc(pagetable, va0) < 0)
         return -1;
