@@ -139,8 +139,9 @@ bget(uint dev, uint blockno)
   // Need to evict a buffer from the cache to make space for the new block
   // Eviction = stealing a free buffer (refcnt == 0) to use for the new block.
   // It does NOT mean the cache is full. It just means the block wasn't found in cache, so you need a free buffer to load it into.
-  release(&bcache.bucket_lock[idx]);
 
+  // BUG: the order is important, if we 1st acquire, then release, we will have the issue, process A holds bucket lock and wait for eviction lock. process B has eviction lock, and lru scan needs bucket lock, deadlock!!
+  release(&bcache.bucket_lock[idx]);
   // Acquire eviction_lock to prevent two process entering miss for the same blockno
   acquire(&bcache.eviction_lock);
   // re-check bucket[idx] — only one process can get acquire eviction_lock to evict and reassign. This re-check make sure,
