@@ -13,8 +13,11 @@ struct buf {
   uint blockno;
   struct sleeplock lock;
   uint refcnt; // A buffer can only be evicted/recycled if its refcnt is exactly 0
-  struct buf *prev; // LRU cache list
+  // lab Remove the list of all buffers (bcache.head etc.) and instead time-stamp buffers using the time of their last use (i.e., using ticks in kernel/trap.c).
+  // we still need next since each bucket has a singly linked list
+  // struct buf *prev; // LRU cache list
   struct buf *next;
+  uint timestamp;
   uchar data[BSIZE];
 };
 
